@@ -1,4 +1,4 @@
-import React, { useState } from 'react';
+import React, { useState, useCallback } from 'react';
 import {
   View,
   Text,
@@ -12,13 +12,15 @@ import {
 } from 'react-native';
 import { useDispatch, useSelector } from 'react-redux';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
+import { Image } from 'expo-image';
+import QRCode from 'react-native-qrcode-svg';
 import Animated, {
-  useSharedValue,
   useAnimatedStyle,
+  useSharedValue,
   withSequence,
+  withSpring,
   withTiming,
 } from 'react-native-reanimated';
-import QRCode from 'react-native-qrcode-svg';
 import { ArrowLeft, ClipboardCopy, Check } from 'lucide-react-native';
 import { createTransaction } from '@/store/slices/transactionSlice';
 import { fetchBalance } from '@/store/slices/appSlice';
@@ -28,6 +30,8 @@ import { Spacing, BorderRadius, Shadow } from '@/constants/Layout';
 import { Typography, FontFamily } from '@/constants/Typography';
 import Card from '@/components/Card';
 import Button from '@/components/Button';
+import NumericInput from '@/components/NumericInput';
+import { formatNumber, unformatNumber } from '@/utils/numberFormatter';
 
 enum PaymentStatus {
   INPUT,
@@ -49,35 +53,23 @@ export default function SavingsScreen() {
   const [copied, setCopied] = useState(false);
 
   // Animation values
-  const shake = useSharedValue(0);
+  const scale = useSharedValue(1);
 
   // Generate random reference number
   function generateReference() {
     return `TRX${Date.now().toString().slice(-8)}${Math.floor(Math.random() * 1000)}`;
   }
 
-  // Format currency input
-  const formatCurrency = (value: string) => {
-    if (!value) return '';
-    
-    // Remove non-digit characters
-    const digitsOnly = value.replace(/\D/g, '');
-    
-    // Format with thousands separator
-    return digitsOnly.replace(/\B(?=(\d{3})+(?!\d))/g, '.');
-  };
-
   // Handle amount change
   const handleAmountChange = (value: string) => {
-    const formattedValue = formatCurrency(value);
-    setAmount(formattedValue);
+    setAmount(value);
   };
 
   // Handle generate QR code
   const handleGenerateQR = () => {
-    if (!amount || parseInt(amount.replace(/\./g, '')) < 10000) {
+    if (!amount || parseInt(amount) < 10000) {
       // Shake animation for invalid input
-      shake.value = withSequence(
+      scale.value = withSequence(
         withTiming(-10, { duration: 50 }),
         withTiming(10, { duration: 100 }),
         withTiming(-10, { duration: 100 }),
@@ -104,7 +96,7 @@ export default function SavingsScreen() {
         dispatch(
           createTransaction({
             type: 'deposit',
-            amount: parseInt(amount.replace(/\./g, '')),
+            amount: parseInt(amount),
             description,
           }) as any
         ).then(() => {
@@ -146,7 +138,7 @@ export default function SavingsScreen() {
   // Shake animation style
   const animatedStyle = useAnimatedStyle(() => {
     return {
-      transform: [{ translateX: shake.value }],
+      transform: [{ translateX: scale.value }],
     };
   });
 
@@ -180,20 +172,14 @@ export default function SavingsScreen() {
         {paymentStatus === PaymentStatus.INPUT && (
           <Animated.View style={[styles.formContainer, animatedStyle]}>
             <Text style={styles.formLabel}>Enter Amount</Text>
-            <View style={styles.amountInputContainer}>
-              <Text style={styles.currencyPrefix}>Rp</Text>
-              <TextInput
-                style={styles.amountInput}
-                value={amount}
-                onChangeText={handleAmountChange}
-                placeholder="0"
-                keyboardType="numeric"
-                placeholderTextColor={Colors.neutral[400]}
-              />
-            </View>
-            <Text style={styles.minAmountText}>
-              Minimum amount: Rp 10.000
-            </Text>
+            <NumericInput
+              value={amount}
+              onChangeText={handleAmountChange}
+              prefix="Rp"
+              placeholder="0"
+              placeholderTextColor={Colors.neutral[400]}
+              error={parseInt(amount || '0') < 10000 ? 'Minimum amount: Rp 10.000' : undefined}
+            />
 
             <View style={styles.descriptionContainer}>
               <Text style={styles.formLabel}>Description (Optional)</Text>
@@ -227,13 +213,13 @@ export default function SavingsScreen() {
               <View style={styles.amountDisplay}>
                 <Text style={styles.amountLabel}>Amount to Pay</Text>
                 <Text style={styles.amountValue}>
-                  {`Rp ${amount}`}
+                  {formatNumber(amount, { currency: 'Rp' })}
                 </Text>
               </View>
 
               <View style={styles.qrCodeWrapper}>
                 <QRCode
-                  value={`NYIMPANG:${reference}:${amount.replace(/\./g, '')}:${description}`}
+                  value={`NYIMPANG:${reference}:${amount}:${description}`}
                   size={200}
                   color={Colors.primary[900]}
                   backgroundColor="white"
@@ -286,7 +272,9 @@ export default function SavingsScreen() {
               <View style={styles.paymentDetails}>
                 <View style={styles.paymentDetailRow}>
                   <Text style={styles.paymentDetailLabel}>Amount:</Text>
-                  <Text style={styles.paymentDetailValue}>{`Rp ${amount}`}</Text>
+                  <Text style={styles.paymentDetailValue}>
+                    {formatNumber(amount, { currency: 'Rp' })}
+                  </Text>
                 </View>
                 <View style={styles.paymentDetailRow}>
                   <Text style={styles.paymentDetailLabel}>Reference:</Text>
@@ -298,49 +286,51 @@ export default function SavingsScreen() {
         )}
 
         {/* Payment Success */}
-{paymentStatus === PaymentStatus.SUCCESS && (
-  <View style={styles.statusContainer}>
-    <Card
-      variant="elevated"
-      padding="large"
-      style={[styles.statusCard, styles.successCard]}
-    >
-      <View style={[styles.statusIcon, styles.successIcon]}>
-        <Check size={40} color={Colors.white} />
-      </View>
-      <Text style={styles.statusTitle}>Payment Successful!</Text>
-      <Text style={styles.statusMessage}>
-        Your savings have been added to your account.
-      </Text>
+        {paymentStatus === PaymentStatus.SUCCESS && (
+          <View style={styles.statusContainer}>
+            <Card
+              variant="elevated"
+              padding="large"
+              style={[styles.statusCard, styles.successCard]}
+            >
+              <View style={[styles.statusIcon, styles.successIcon]}>
+                <Check size={40} color={Colors.white} />
+              </View>
+              <Text style={styles.statusTitle}>Payment Successful!</Text>
+              <Text style={styles.statusMessage}>
+                Your savings have been added to your account.
+              </Text>
 
-      <View style={styles.paymentDetails}>
-        <View style={styles.paymentDetailRow}>
-          <Text style={styles.paymentDetailLabel}>Amount:</Text>
-          <Text style={styles.paymentDetailValue}>{`Rp ${amount}`}</Text>
-        </View>
+              <View style={styles.paymentDetails}>
+                <View style={styles.paymentDetailRow}>
+                  <Text style={styles.paymentDetailLabel}>Amount:</Text>
+                  <Text style={styles.paymentDetailValue}>
+                    {formatNumber(amount, { currency: 'Rp' })}
+                  </Text>
+                </View>
 
-        <View style={styles.paymentDetailRow}>
-          <Text style={styles.paymentDetailLabel}>Reference:</Text>
-          <Text style={styles.paymentDetailValue}>{reference}</Text>
-        </View>
+                <View style={styles.paymentDetailRow}>
+                  <Text style={styles.paymentDetailLabel}>Reference:</Text>
+                  <Text style={styles.paymentDetailValue}>{reference}</Text>
+                </View>
 
-        {description ? (
-          <View style={styles.paymentDetailRow}>
-            <Text style={styles.paymentDetailLabel}>Description:</Text>
-            <Text style={styles.paymentDetailValue}>{description}</Text>
+                {description ? (
+                  <View style={styles.paymentDetailRow}>
+                    <Text style={styles.paymentDetailLabel}>Description:</Text>
+                    <Text style={styles.paymentDetailValue}>{description}</Text>
+                  </View>
+                ) : null}
+              </View>
+
+              <Button
+                title="Done"
+                onPress={resetPaymentFlow}
+                fullWidth
+                style={styles.doneButton}
+              />
+            </Card>
           </View>
-        ) : null}
-      </View>
-
-      <Button
-        title="Done"
-        onPress={resetPaymentFlow}
-        fullWidth
-        style={styles.doneButton}
-      />
-    </Card>
-  </View>
-)}
+        )}
 
         {/* Payment Failed */}
         {paymentStatus === PaymentStatus.FAILED && (
@@ -360,7 +350,9 @@ export default function SavingsScreen() {
               <View style={styles.paymentDetails}>
                 <View style={styles.paymentDetailRow}>
                   <Text style={styles.paymentDetailLabel}>Amount:</Text>
-                  <Text style={styles.paymentDetailValue}>{`Rp ${amount}`}</Text>
+                  <Text style={styles.paymentDetailValue}>
+                    {formatNumber(amount, { currency: 'Rp' })}
+                  </Text>
                 </View>
                 <View style={styles.paymentDetailRow}>
                   <Text style={styles.paymentDetailLabel}>Reference:</Text>
@@ -417,32 +409,6 @@ const styles = StyleSheet.create({
     ...Typography.labelLarge,
     color: Colors.neutral[800],
     marginBottom: Spacing.sm,
-  },
-  amountInputContainer: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    borderWidth: 1,
-    borderColor: Colors.neutral[300],
-    borderRadius: BorderRadius.md,
-    paddingHorizontal: Spacing.md,
-    marginBottom: Spacing.xs,
-  },
-  currencyPrefix: {
-    ...Typography.headingMedium,
-    color: Colors.neutral[700],
-    marginRight: Spacing.xs,
-  },
-  amountInput: {
-    flex: 1,
-    ...Typography.headingLarge,
-    color: Colors.neutral[900],
-    padding: Spacing.md,
-    fontFamily: FontFamily.medium,
-  },
-  minAmountText: {
-    ...Typography.caption,
-    color: Colors.neutral[600],
-    marginBottom: Spacing.lg,
   },
   descriptionContainer: {
     marginBottom: Spacing.lg,
