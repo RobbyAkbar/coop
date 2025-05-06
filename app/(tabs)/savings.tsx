@@ -1,5 +1,6 @@
 import React, { useState, useCallback } from 'react';
 import {
+	Linking,
   View,
   Text,
   StyleSheet,
@@ -32,6 +33,9 @@ import Card from '@/components/Card';
 import Button from '@/components/Button';
 import NumericInput from '@/components/NumericInput';
 import { formatNumber, unformatNumber } from '@/utils/numberFormatter';
+import { PaymentDetails, PaymentValidationError } from '@/types/payment';
+import { validatePayment } from '@/utils/paymentValidator';
+import { formatWhatsAppMessage, generateWhatsAppLink } from '@/utils/whatsappHelper';
 
 enum PaymentStatus {
   INPUT,
@@ -84,30 +88,66 @@ export default function SavingsScreen() {
   };
 
   // Handle submit payment
-  const handleSubmitPayment = () => {
+  const handleSubmitPayment = async () => {
+  try {
+    // Validate payment
+    const validationError = validatePayment(amount, description);
+    if (validationError) {
+      Alert.alert('Validation Error', validationError.message);
+      return;
+    }
+
     // Set to pending state
     setPaymentStatus(PaymentStatus.PENDING);
+
+    // Prepare payment details
+    const paymentDetails: PaymentDetails = {
+      amount: parseFloat(amount.replace(/[^0-9.-]+/g, '')),
+      reference,
+      description,
+      timestamp: new Date().toISOString(),
+    };
+
+    // Create transaction in Redux
+    const result = await dispatch(
+      createTransaction({
+        type: 'deposit',
+        amount: paymentDetails.amount,
+        description: paymentDetails.description,
+      }) as any
+    ).unwrap();
+
+    // Format WhatsApp message
+    const message = formatWhatsAppMessage(paymentDetails);
+    const whatsappLink = generateWhatsAppLink({
+      phoneNumber: '6281234567890', // Replace with actual admin number
+      message,
+    });
+
+    // Update balance and set success state
+    await dispatch(fetchBalance() as any);
+    setPaymentStatus(PaymentStatus.SUCCESS);
+
+    // Open WhatsApp
+    const canOpen = await Linking.canOpenURL(whatsappLink);
+    if (canOpen) {
+      await Linking.openURL(whatsappLink);
+    } else {
+      Alert.alert(
+        'WhatsApp Not Available',
+        'Please make sure WhatsApp is installed on your device.'
+      );
+    }
+  } catch (error) {
+    console.error('Payment submission failed:', error);
+    setPaymentStatus(PaymentStatus.FAILED);
     
-    // Simulate payment processing
-    setTimeout(() => {
-      const success = Math.random() > 0.2; // 80% success rate for demo
-      
-      if (success) {
-        dispatch(
-          createTransaction({
-            type: 'deposit',
-            amount: parseInt(amount),
-            description,
-          }) as any
-        ).then(() => {
-          dispatch(fetchBalance() as any);
-          setPaymentStatus(PaymentStatus.SUCCESS);
-        });
-      } else {
-        setPaymentStatus(PaymentStatus.FAILED);
-      }
-    }, 3000);
-  };
+    Alert.alert(
+      'Payment Failed',
+      'There was an error processing your payment. Please try again.'
+    );
+  }
+};
 
   // Handle copy reference
   const handleCopyReference = () => {
